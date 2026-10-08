@@ -1,0 +1,509 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>2D DOOM - Chromebook Edition</title>
+  <style>
+    :root {
+      --bg: #111;
+      --panel: #1b1b1b;
+      --green: #6efc8d;
+      --red: #ff4d4d;
+      --gold: #ffd166;
+      --dark: #0d0d0d;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      background: radial-gradient(circle at center, #1d1d1d 0%, #090909 100%);
+      font-family: Arial, Helvetica, sans-serif;
+      color: white;
+    }
+
+    #gameWrap {
+      position: relative;
+      width: min(90vw, 900px);
+      aspect-ratio: 4 / 3;
+      border: 3px solid var(--green);
+      box-shadow: 0 0 25px rgba(110, 252, 141, 0.5);
+      background: var(--bg);
+      overflow: hidden;
+    }
+
+    canvas {
+      display: block;
+      width: 100%;
+      height: 100%;
+      background: #000;
+      image-rendering: pixelated;
+    }
+
+    #hud {
+      position: absolute;
+      top: 12px;
+      left: 12px;
+      right: 12px;
+      display: flex;
+      justify-content: space-between;
+      pointer-events: none;
+      font-weight: bold;
+      text-shadow: 0 0 10px rgba(0,0,0,0.7);
+    }
+
+    .hudBox {
+      background: rgba(0,0,0,0.35);
+      border: 2px solid var(--green);
+      padding: 8px 12px;
+      color: var(--green);
+      font-size: clamp(12px, 2vw, 20px);
+    }
+
+    #gameOver {
+      position: absolute;
+      inset: 0;
+      display: none;
+      place-items: center;
+      background: rgba(0,0,0,0.82);
+      z-index: 5;
+    }
+
+    .panel {
+      border: 3px solid var(--red);
+      background: #110000;
+      padding: 28px 40px;
+      text-align: center;
+      box-shadow: 0 0 30px rgba(255, 77, 77, 0.7);
+    }
+
+    .panel h1 {
+      margin: 0 0 12px;
+      font-size: clamp(28px, 5vw, 52px);
+      color: var(--red);
+    }
+
+    .panel p {
+      margin: 8px 0;
+      color: var(--gold);
+      font-size: clamp(14px, 2vw, 22px);
+      font-weight: bold;
+    }
+
+    button {
+      margin-top: 18px;
+      padding: 12px 22px;
+      font-size: clamp(14px, 2vw, 20px);
+      font-weight: bold;
+      border: 2px solid var(--gold);
+      background: var(--red);
+      color: #111;
+      cursor: pointer;
+    }
+
+    button:hover {
+      filter: brightness(1.1);
+    }
+  </style>
+</head>
+<body>
+  <div id="gameWrap">
+    <canvas id="gameCanvas" width="900" height="675"></canvas>
+
+    <div id="hud">
+      <div class="hudBox" id="health">HP: 100</div>
+      <div class="hudBox" id="score">SCORE: 0</div>
+      <div class="hudBox" id="ammo">AMMO: 12</div>
+    </div>
+
+    <div id="gameOver">
+      <div class="panel">
+        <h1>YOU DIED</h1>
+        <p id="finalScoreText">Score: 0</p>
+        <p id="finalEnemyText">Demons killed: 0</p>
+        <button onclick="location.reload()">Restart</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+
+    const TILE = 32;
+    const MAP_COLS = 22;
+    const MAP_ROWS = 16;
+    const PLAYER_RADIUS = 13;
+    const ENEMY_RADIUS = 12;
+    const BULLET_SPEED = 7;
+
+    const player = {
+      x: 2.5 * TILE,
+      y: 2.5 * TILE,
+      radius: PLAYER_RADIUS,
+      speed: 2.7,
+      hp: 100,
+      ammo: 12,
+      cooldown: 0,
+      facing: 0
+    };
+
+    let score = 0;
+    let enemiesKilled = 0;
+    let gameOver = false;
+
+    const keys = {};
+    const bullets = [];
+    const enemies = [];
+
+    const map = [
+      "######################",
+      "#........#...........#",
+      "#.####...#....#....#.#",
+      "#...#....#....#....#.#",
+      "#.##.#..#....#....#.#",
+      "#....#..#....#....#.#",
+      "#.##.#..####.#....#.#",
+      "#....#........#....#.#",
+      "#.####.######.#....#.#",
+      "#..............#....#.#",
+      "#.##########.#.#....#",
+      "#........#..#.#....#.#",
+      "#.####.#.#..#.#....#.#",
+      "#......#.#..#....#..#",
+      "#..E.............#..#",
+      "######################"
+    ];
+
+    function initEnemies() {
+      enemies.length = 0;
+      const spawnPoints = [
+        { x: 18, y: 2 },
+        { x: 18, y: 12 },
+        { x: 8, y: 9 },
+        { x: 5, y: 12 },
+        { x: 12, y: 5 },
+        { x: 15, y: 10 }
+      ];
+
+      for (const p of spawnPoints) {
+        enemies.push({
+          x: p.x * TILE + TILE / 2,
+          y: p.y * TILE + TILE / 2,
+          radius: ENEMY_RADIUS,
+          hp: 35,
+          speed: 0.9 + Math.random() * 0.8,
+          angle: 0,
+          cooldown: 30 + Math.random() * 50
+        });
+      }
+    }
+
+    function clamp(value, min, max) {
+      return Math.min(max, Math.max(min, value));
+    }
+
+    function wallAt(tileX, tileY) {
+      if (tileY < 0 || tileY >= MAP_ROWS || tileX < 0 || tileX >= MAP_COLS) return true;
+      return map[tileY][tileX] === '#';
+    }
+
+    function collidesWithWall(x, y, radius) {
+      const left = Math.floor((x - radius) / TILE);
+      const right = Math.floor((x + radius) / TILE);
+      const top = Math.floor((y - radius) / TILE);
+      const bottom = Math.floor((y + radius) / TILE);
+
+      for (let ty = top; ty <= bottom; ty++) {
+        for (let tx = left; tx <= right; tx++) {
+          if (wallAt(tx, ty)) return true;
+        }
+      }
+      return false;
+    }
+
+    function mouseToAngle(clientX, clientY) {
+      const rect = canvas.getBoundingClientRect();
+      const mx = ((clientX - rect.left) / rect.width) * canvas.width;
+      const my = ((clientY - rect.top) / rect.height) * canvas.height;
+      return Math.atan2(my - canvas.height / 2, mx - canvas.width / 2);
+    }
+
+    canvas.addEventListener('mousemove', (e) => {
+      player.facing = mouseToAngle(e.clientX, e.clientY);
+    });
+
+    canvas.addEventListener('click', () => {
+      shoot();
+    });
+
+    document.addEventListener('keydown', (e) => {
+      keys[e.key.toLowerCase()] = true;
+      if (e.key === ' ') {
+        e.preventDefault();
+        shoot();
+      }
+    });
+
+    document.addEventListener('keyup', (e) => {
+      keys[e.key.toLowerCase()] = false;
+    });
+
+    function shoot() {
+      if (gameOver) return;
+      if (player.cooldown > 0 || player.ammo <= 0) return;
+
+      player.ammo--;
+      player.cooldown = 220;
+
+      bullets.push({
+        x: player.x,
+        y: player.y,
+        vx: Math.cos(player.facing) * BULLET_SPEED,
+        vy: Math.sin(player.facing) * BULLET_SPEED,
+        radius: 4,
+        life: 90
+      });
+    }
+
+    function updatePlayer() {
+      if (gameOver) return;
+
+      let dx = 0;
+      let dy = 0;
+
+      if (keys['w'] || keys['arrowup']) dy -= 1;
+      if (keys['s'] || keys['arrowdown']) dy += 1;
+      if (keys['a'] || keys['arrowleft']) dx -= 1;
+      if (keys['d'] || keys['arrowright']) dx += 1;
+
+      if (dx !== 0 || dy !== 0) {
+        const length = Math.hypot(dx, dy) || 1;
+        dx = (dx / length) * player.speed;
+        dy = (dy / length) * player.speed;
+
+        const nx = player.x + dx;
+        const ny = player.y;
+        const n2x = player.x;
+        const n2y = player.y + dy;
+
+        if (!collidesWithWall(nx, ny, player.radius)) player.x = nx;
+        if (!collidesWithWall(n2x, n2y, player.radius)) player.y = n2y;
+      }
+
+      if (player.cooldown > 0) player.cooldown -= 1;
+    }
+
+    function updateBullets() {
+      for (let i = bullets.length - 1; i >= 0; i--) {
+        const b = bullets[i];
+        b.x += b.vx;
+        b.y += b.vy;
+        b.life -= 1;
+
+        if (b.life <= 0) {
+          bullets.splice(i, 1);
+          continue;
+        }
+
+        const tileX = Math.floor(b.x / TILE);
+        const tileY = Math.floor(b.y / TILE);
+        if (wallAt(tileX, tileY)) {
+          bullets.splice(i, 1);
+          continue;
+        }
+
+        for (let j = enemies.length - 1; j >= 0; j--) {
+          const e = enemies[j];
+          const dist = Math.hypot(b.x - e.x, b.y - e.y);
+          if (dist < e.radius + b.radius) {
+            e.hp -= 25;
+            bullets.splice(i, 1);
+
+            if (e.hp <= 0) {
+              enemies.splice(j, 1);
+              score += 100;
+              enemiesKilled += 1;
+              if (enemies.length === 0) {
+                player.ammo += 6;
+                initEnemies();
+              }
+            }
+            break;
+          }
+        }
+      }
+    }
+
+    function updateEnemies() {
+      for (const e of enemies) {
+        const dx = player.x - e.x;
+        const dy = player.y - e.y;
+        const dist = Math.hypot(dx, dy) || 1;
+
+        e.angle = Math.atan2(dy, dx);
+        e.cooldown -= 1;
+
+        if (dist > 70) {
+          const stepX = (dx / dist) * e.speed;
+          const stepY = (dy / dist) * e.speed;
+
+          const nx = e.x + stepX;
+          const ny = e.y;
+          const n2x = e.x;
+          const n2y = e.y + stepY;
+
+          if (!collidesWithWall(nx, ny, e.radius)) e.x = nx;
+          if (!collidesWithWall(n2x, n2y, e.radius)) e.y = n2y;
+        }
+
+        if (dist < 240 && e.cooldown <= 0) {
+          const bulletAngle = Math.atan2(player.y - e.y, player.x - e.x);
+          bullets.push({
+            x: e.x,
+            y: e.y,
+            vx: Math.cos(bulletAngle) * 4.2,
+            vy: Math.sin(bulletAngle) * 4.2,
+            radius: 5,
+            life: 90,
+            enemy: true
+          });
+          e.cooldown = 100 + Math.random() * 60;
+        }
+      }
+    }
+
+    function updateEnemyBullets() {
+      for (let i = bullets.length - 1; i >= 0; i--) {
+        const b = bullets[i];
+        if (!b.enemy) continue;
+        b.x += b.vx;
+        b.y += b.vy;
+        b.life -= 1;
+
+        if (b.life <= 0) {
+          bullets.splice(i, 1);
+          continue;
+        }
+
+        const dist = Math.hypot(b.x - player.x, b.y - player.y);
+        if (dist < player.radius + b.radius) {
+          bullets.splice(i, 1);
+          player.hp -= 10;
+          if (player.hp <= 0) {
+            endGame();
+          }
+        }
+      }
+    }
+
+    function drawMap() {
+      ctx.fillStyle = '#101010';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      for (let row = 0; row < MAP_ROWS; row++) {
+        for (let col = 0; col < MAP_COLS; col++) {
+          const x = col * TILE;
+          const y = row * TILE;
+
+          if (map[row][col] === '#') {
+            ctx.fillStyle = '#3d3d3d';
+            ctx.fillRect(x, y, TILE, TILE);
+            ctx.strokeStyle = '#666';
+            ctx.strokeRect(x + 0.5, y + 0.5, TILE - 1, TILE - 1);
+          } else {
+            ctx.fillStyle = '#141414';
+            ctx.fillRect(x, y, TILE, TILE);
+          }
+        }
+      }
+    }
+
+    function drawPlayer() {
+      ctx.save();
+      ctx.translate(player.x, player.y);
+      ctx.rotate(player.facing);
+
+      ctx.fillStyle = '#6efc8d';
+      ctx.fillRect(0, -5, 22, 10);
+      ctx.beginPath();
+      ctx.arc(0, 0, player.radius, 0, Math.PI * 2);
+      ctx.fillStyle = '#0fdf6f';
+      ctx.fill();
+
+      ctx.fillStyle = '#111';
+      ctx.fillRect(12, -2, 7, 4);
+      ctx.restore();
+    }
+
+    function drawBullets() {
+      for (const b of bullets) {
+        if (b.enemy) {
+          ctx.fillStyle = '#ff8c42';
+        } else {
+          ctx.fillStyle = '#ffd166';
+        }
+
+        ctx.beginPath();
+        ctx.arc(b.x, b.y, b.radius, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+
+    function drawEnemies() {
+      for (const e of enemies) {
+        ctx.save();
+        ctx.translate(e.x, e.y);
+        ctx.rotate(e.angle);
+
+        ctx.fillStyle = '#ff4d4d';
+        ctx.beginPath();
+        ctx.arc(0, 0, e.radius, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.fillStyle = '#111';
+        ctx.fillRect(8, -3, 9, 6);
+        ctx.restore();
+      }
+    }
+
+    function drawHudText() {
+      document.getElementById('health').textContent = `HP: ${Math.max(0, player.hp)}`;
+      document.getElementById('score').textContent = `SCORE: ${score}`;
+      document.getElementById('ammo').textContent = `AMMO: ${player.ammo}`;
+    }
+
+    function endGame() {
+      gameOver = true;
+      const gameOverBox = document.getElementById('gameOver');
+      document.getElementById('finalScoreText').textContent = `Score: ${score}`;
+      document.getElementById('finalEnemyText').textContent = `Demons killed: ${enemiesKilled}`;
+      gameOverBox.style.display = 'grid';
+    }
+
+    function gameLoop() {
+      if (!gameOver) {
+        updatePlayer();
+        updateBullets();
+        updateEnemies();
+        updateEnemyBullets();
+      }
+
+      drawMap();
+      drawBullets();
+      drawEnemies();
+      drawPlayer();
+      drawHudText();
+
+      requestAnimationFrame(gameLoop);
+    }
+
+    initEnemies();
+    gameLoop();
+  </script>
+</body>
+</html>
